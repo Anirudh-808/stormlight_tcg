@@ -1,11 +1,28 @@
 
 import pool from "@/lib/mysql";
 import bcrypt from "bcryptjs";
-import { createToken } from "@/lib/auth";
+import { createToken, verifyToken } from "@/lib/auth";
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 
 export async function POST(request) {
     try {
+        // Check whether the user already has a valid session
+        const cookieStore = await cookies();
+        const existingToken = cookieStore.get("tcg_session")?.value;
+
+        if (existingToken) {
+            const existingSession = await verifyToken(existingToken);
+
+            if (existingSession?.player_id) {
+                return NextResponse.json({
+                    success: false,
+                    message: "You are already logged in.",
+                    error: { code: "ALREADY_AUTHENTICATED" }
+                }, { status: 409 });
+            }
+        }
+
         let body;
 
         try {
@@ -54,7 +71,7 @@ export async function POST(request) {
         const player = rows[0];
 
         // Computer opponents cannot log in
-        if (player.is_computer) {
+        if (player.is_computer || !player.password_hash) {
             return NextResponse.json({
                 success: false,
                 message: "Invalid username or password.",
@@ -63,14 +80,6 @@ export async function POST(request) {
         }
 
         // Check password hash
-        if (!player.password_hash) {
-            return NextResponse.json({
-                success: false,
-                message: "Invalid username or password.",
-                error: { code: "UNAUTHORIZED" }
-            }, { status: 401 });
-        }
-
         const passwordMatches = await bcrypt.compare(
             password,
             player.password_hash
@@ -87,7 +96,6 @@ export async function POST(request) {
         // Generate authentication token
         const token = await createToken(player);
 
-        // Create response
         const response = NextResponse.json({
             success: true,
             message: "Login successful.",
